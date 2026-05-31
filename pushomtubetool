@@ -1,0 +1,386 @@
+# PushomTube 🎬
+
+A beautiful paste-and-click YouTube downloader desktop app.  
+Works on **Windows** and **Mac** — no terminal needed.
+
+## Features
+- 🎬 Download MP4, WebM, MP3, WAV
+- 📺 Quality up to 4K
+- 📁 Choose your save folder
+- 📋 One-click paste from clipboard
+- 📊 Real-time progress bar
+- 🗂 Auto-opens folder when done
+
+## Download the App
+Go to the **Actions** tab → click the latest build → scroll down to **Artifacts** → download for your platform:
+- **PushomTube-Mac.zip** → for Mac users
+- **PushomTube-Windows.zip** → for Windows users
+
+## Personal use only. Respect copyright.
+Powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+
+import customtkinter as ctk
+import threading
+import subprocess
+import sys
+import os
+import re
+from tkinter import filedialog, StringVar
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("dark-blue")
+
+RED      = "#e63946"
+RED_DARK = "#c1121f"
+BG       = "#0d0d0d"
+CARD     = "#161616"
+CARD2    = "#1e1e1e"
+BORDER   = "#2a2a2a"
+MUTED    = "#888888"
+WHITE    = "#f1f1f1"
+GREEN    = "#4ade80"
+GOLD     = "#f4a261"
+
+
+def get_yt_dlp():
+    try:
+        base = sys._MEIPASS
+    except AttributeError:
+        base = os.path.dirname(os.path.abspath(__file__))
+    bundled = os.path.join(base, "yt-dlp")
+    if os.path.isfile(bundled):
+        return bundled
+    return "yt-dlp"
+
+
+class PushomTube(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("PushomTube")
+        self.geometry("680x820")
+        self.minsize(580, 700)
+        self.configure(fg_color=BG)
+
+        self.download_path = StringVar(value=os.path.expanduser("~/Downloads"))
+        self.fmt_var       = StringVar(value="mp4")
+        self.quality_var   = StringVar(value="1080")
+        self.status_var    = StringVar(value="")
+        self.progress_var  = ctk.DoubleVar(value=0)
+        self._proc         = None
+        self._fmt_btns     = {}
+        self._q_btns       = {}
+
+        self._build_ui()
+
+    def _card(self, parent, top=0):
+        f = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=16,
+                         border_color=BORDER, border_width=1)
+        f.pack(fill="x", pady=(top, 0))
+        inner = ctk.CTkFrame(f, fg_color="transparent")
+        inner.pack(fill="x", padx=20, pady=16)
+        return inner
+
+    def _build_ui(self):
+        outer = ctk.CTkScrollableFrame(self, fg_color=BG,
+                                       scrollbar_button_color=BORDER)
+        outer.pack(fill="both", expand=True)
+
+        wrap = ctk.CTkFrame(outer, fg_color=BG)
+        wrap.pack(fill="both", expand=True, padx=30)
+        wrap.grid_columnconfigure(0, weight=1)
+
+        # Logo
+        logo_row = ctk.CTkFrame(wrap, fg_color="transparent")
+        logo_row.pack(fill="x", pady=(28, 0))
+        icon_box = ctk.CTkFrame(logo_row, fg_color=RED, corner_radius=12,
+                                width=42, height=42)
+        icon_box.pack(side="left")
+        icon_box.pack_propagate(False)
+        ctk.CTkLabel(icon_box, text="▶", font=("Arial", 18, "bold"),
+                     text_color=WHITE).place(relx=.5, rely=.5, anchor="center")
+        ctk.CTkLabel(logo_row, text="PushomTube",
+                     font=("Helvetica Neue", 20, "bold"),
+                     text_color=WHITE).pack(side="left", padx=(10, 0))
+        ctk.CTkLabel(logo_row, text="FREE TOOL",
+                     font=("Helvetica Neue", 10),
+                     text_color=MUTED).pack(side="right")
+
+        # Hero
+        ctk.CTkLabel(wrap, text="Download any YouTube\nvideo in one click.",
+                     font=("Helvetica Neue", 32, "bold"),
+                     text_color=WHITE, justify="left",
+                     anchor="w").pack(fill="x", pady=(28, 6))
+        ctk.CTkLabel(wrap,
+                     text="Paste a link, pick format & quality, hit Download — that's it.",
+                     font=("Helvetica Neue", 13),
+                     text_color=MUTED, justify="left",
+                     anchor="w").pack(fill="x")
+
+        # URL card
+        url_card = self._card(wrap, top=24)
+        ctk.CTkLabel(url_card, text="YOUTUBE URL",
+                     font=("Helvetica Neue", 10),
+                     text_color=MUTED).pack(anchor="w", pady=(0, 6))
+        url_row = ctk.CTkFrame(url_card, fg_color="transparent")
+        url_row.pack(fill="x")
+        url_row.grid_columnconfigure(0, weight=1)
+        self.url_entry = ctk.CTkEntry(
+            url_row, placeholder_text="https://youtube.com/watch?v=...",
+            fg_color=CARD2, border_color=BORDER, border_width=1,
+            text_color=WHITE, placeholder_text_color="#444",
+            font=("Helvetica Neue", 13), height=46, corner_radius=12)
+        self.url_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.url_entry.bind("<Return>", lambda e: self._start_download())
+        ctk.CTkButton(url_row, text="Paste", width=70, height=46,
+                      fg_color=CARD2, hover_color="#2a2a2a",
+                      border_color=BORDER, border_width=1,
+                      text_color=MUTED, corner_radius=12,
+                      font=("Helvetica Neue", 13),
+                      command=self._paste).grid(row=0, column=1)
+
+        # Format card
+        fmt_card = self._card(wrap, top=12)
+        ctk.CTkLabel(fmt_card, text="FORMAT",
+                     font=("Helvetica Neue", 10),
+                     text_color=MUTED).pack(anchor="w", pady=(0, 8))
+        fmt_grid = ctk.CTkFrame(fmt_card, fg_color="transparent")
+        fmt_grid.pack(fill="x")
+        formats = [("🎬  MP4","mp4"),("🌐  WebM","webm"),
+                   ("🎵  MP3","mp3"),("🔊  WAV","wav")]
+        for i, (label, val) in enumerate(formats):
+            b = ctk.CTkButton(fmt_grid, text=label, height=52,
+                              fg_color=CARD2, hover_color="#2a2a2a",
+                              border_color=BORDER, border_width=1,
+                              text_color=MUTED, corner_radius=12,
+                              font=("Helvetica Neue", 13),
+                              command=lambda v=val: self._set_fmt(v))
+            b.grid(row=0, column=i, sticky="ew",
+                   padx=(0, 8 if i < 3 else 0))
+            fmt_grid.grid_columnconfigure(i, weight=1)
+            self._fmt_btns[val] = b
+
+        # Quality card
+        qual_card = self._card(wrap, top=12)
+        ctk.CTkLabel(qual_card, text="QUALITY",
+                     font=("Helvetica Neue", 10),
+                     text_color=MUTED).pack(anchor="w", pady=(0, 8))
+        q_row = ctk.CTkFrame(qual_card, fg_color="transparent")
+        q_row.pack(fill="x")
+        qualities = [("4K","2160"),("1440p","1440"),("1080p","1080"),
+                     ("720p","720"),("480p","480"),("Best","best")]
+        for i, (label, val) in enumerate(qualities):
+            b = ctk.CTkButton(q_row, text=label, height=40,
+                              fg_color=CARD2, hover_color="#2a2a2a",
+                              border_color=BORDER, border_width=1,
+                              text_color=MUTED, corner_radius=10,
+                              font=("Helvetica Neue", 12),
+                              command=lambda v=val: self._set_quality(v))
+            b.grid(row=0, column=i, sticky="ew",
+                   padx=(0, 6 if i < 5 else 0))
+            q_row.grid_columnconfigure(i, weight=1)
+            self._q_btns[val] = b
+
+        # Save folder card
+        save_card = self._card(wrap, top=12)
+        ctk.CTkLabel(save_card, text="SAVE TO",
+                     font=("Helvetica Neue", 10),
+                     text_color=MUTED).pack(anchor="w", pady=(0, 6))
+        save_row = ctk.CTkFrame(save_card, fg_color="transparent")
+        save_row.pack(fill="x")
+        save_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(save_row, textvariable=self.download_path,
+                     fg_color=CARD2, corner_radius=12,
+                     text_color=MUTED, font=("Helvetica Neue", 12),
+                     anchor="w", padx=14).grid(row=0, column=0,
+                     sticky="ew", padx=(0, 8), ipady=12)
+        ctk.CTkButton(save_row, text="Browse", width=80, height=46,
+                      fg_color=CARD2, hover_color="#2a2a2a",
+                      border_color=BORDER, border_width=1,
+                      text_color=MUTED, corner_radius=12,
+                      font=("Helvetica Neue", 13),
+                      command=self._browse).grid(row=0, column=1)
+
+        # Download button
+        self.dl_btn = ctk.CTkButton(
+            wrap, text="Download  →", height=58,
+            fg_color=RED, hover_color=RED_DARK,
+            text_color=WHITE, corner_radius=14,
+            font=("Helvetica Neue", 16, "bold"),
+            command=self._start_download)
+        self.dl_btn.pack(fill="x", pady=(18, 0))
+
+        # Progress bar
+        self.progress_bar = ctk.CTkProgressBar(
+            wrap, variable=self.progress_var,
+            fg_color=CARD2, progress_color=RED,
+            corner_radius=6, height=6)
+        self.progress_bar.pack(fill="x", pady=(14, 0))
+        self.progress_bar.set(0)
+
+        # Status label
+        self.status_label = ctk.CTkLabel(
+            wrap, textvariable=self.status_var,
+            font=("Helvetica Neue", 12), text_color=MUTED,
+            anchor="w", justify="left")
+        self.status_label.pack(fill="x", pady=(8, 0))
+
+        # Log box
+        self.log_box = ctk.CTkTextbox(
+            wrap, height=110, fg_color=CARD2,
+            border_color=BORDER, border_width=1,
+            text_color="#666", font=("Courier New", 11),
+            corner_radius=12, state="disabled")
+        self.log_box.pack(fill="x", pady=(10, 0))
+
+        # Footer
+        ctk.CTkLabel(wrap,
+                     text="Powered by yt-dlp  •  Personal use only  •  Respect copyright",
+                     font=("Helvetica Neue", 10),
+                     text_color="#333").pack(pady=(20, 28))
+
+        # Apply default selections AFTER all widgets are built
+        self._set_fmt("mp4")
+        self._set_quality("1080")
+
+    def _paste(self):
+        try:
+            txt = self.clipboard_get()
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, txt)
+        except Exception:
+            pass
+
+    def _browse(self):
+        path = filedialog.askdirectory(initialdir=self.download_path.get())
+        if path:
+            self.download_path.set(path)
+
+    def _set_fmt(self, val):
+        self.fmt_var.set(val)
+        is_audio = val in ("mp3", "wav")
+        for k, b in self._fmt_btns.items():
+            active = k == val
+            b.configure(
+                fg_color="#1a0a0a" if active else CARD2,
+                border_color=RED if active else BORDER,
+                text_color=RED if active else MUTED)
+        for b in self._q_btns.values():
+            b.configure(
+                state="disabled" if is_audio else "normal",
+                text_color="#333" if is_audio else MUTED)
+        if is_audio:
+            self.quality_var.set("best")
+
+    def _set_quality(self, val):
+        self.quality_var.set(val)
+        for k, b in self._q_btns.items():
+            active = k == val
+            b.configure(
+                fg_color="#1a0a0a" if active else CARD2,
+                border_color=RED if active else BORDER,
+                text_color=RED if active else MUTED)
+
+    def _log(self, text):
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", text + "\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _set_status(self, text, color=MUTED):
+        self.status_var.set(text)
+        self.status_label.configure(text_color=color)
+
+    def _start_download(self):
+        url = self.url_entry.get().strip()
+        if not url:
+            self._set_status("⚠  Please paste a YouTube URL first.", GOLD)
+            return
+        if "youtube.com" not in url and "youtu.be" not in url:
+            self._set_status("⚠  That doesn't look like a YouTube link.", GOLD)
+            return
+        self.dl_btn.configure(state="disabled", text="Downloading…",
+                              fg_color="#333")
+        self.progress_var.set(0)
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+        self._set_status("Starting download…", MUTED)
+        threading.Thread(target=self._download_thread,
+                         args=(url,), daemon=True).start()
+
+    def _download_thread(self, url):
+        fmt     = self.fmt_var.get()
+        quality = self.quality_var.get()
+        outdir  = self.download_path.get()
+        ytdlp   = get_yt_dlp()
+        is_audio = fmt in ("mp3", "wav")
+
+        cmd = [ytdlp, "--newline", "--progress", "-o",
+               os.path.join(outdir, "%(title)s.%(ext)s")]
+        if is_audio:
+            cmd += ["-x", "--audio-format", fmt, "--audio-quality", "0"]
+        else:
+            if quality == "best":
+                fmt_str = "bestvideo+bestaudio/best"
+            else:
+                fmt_str = f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]"
+            cmd += ["-f", fmt_str, "--merge-output-format", fmt]
+        cmd.append(url)
+
+        try:
+            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, creationflags=flags)
+
+            for line in self._proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                self.after(0, self._log, line)
+                m = re.search(r"(\d+\.?\d*)%", line)
+                if m:
+                    pct = float(m.group(1)) / 100
+                    self.after(0, self.progress_var.set, pct)
+                    self.after(0, self._set_status,
+                               f"Downloading… {m.group(1)}%", MUTED)
+                if "Merging" in line or "ffmpeg" in line.lower():
+                    self.after(0, self._set_status,
+                               "Merging audio & video…", MUTED)
+
+            self._proc.wait()
+            if self._proc.returncode == 0:
+                self.after(0, self.progress_var.set, 1.0)
+                self.after(0, self._set_status,
+                           f"✓  Done! Saved to {outdir}", GREEN)
+                self.after(0, self._open_folder, outdir)
+            else:
+                self.after(0, self._set_status,
+                           "✗  Download failed. Check the log below.", RED)
+
+        except FileNotFoundError:
+            self.after(0, self._set_status,
+                       "✗  yt-dlp not found. Run: pip3 install yt-dlp", RED)
+        except Exception as e:
+            self.after(0, self._set_status, f"✗  Error: {e}", RED)
+        finally:
+            self.after(0, self.dl_btn.configure,
+                       {"state": "normal", "text": "Download  →",
+                        "fg_color": RED})
+            self._proc = None
+
+    def _open_folder(self, path):
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    app = PushomTube()
+    app.mainloop()
